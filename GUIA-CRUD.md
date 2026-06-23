@@ -308,6 +308,107 @@ Mismo concepto de inmutabilidad, sin archivo de store. **Menos cosas que cablear
 
 ---
 
+## 3.5) ZUSTAND a detalle
+
+### Qué es (modelo mental)
+Una "caja" de estado **global** que vive fuera de los componentes. Cualquier componente se **suscribe** a un pedazo y lo lee/modifica directo, **sin pasar props** (adiós prop drilling). Más ligero que Redux: sin providers, sin reducers, sin boilerplate.
+
+### Anatomía de `create`
+```ts
+import { create } from "zustand";
+
+interface BearStore {
+  bears: number;          // estado
+  addBear: () => void;    // acción
+  reset: () => void;
+}
+
+// create<T>( (set, get) => ({ ...estado, ...acciones }) )
+export const useBearStore = create<BearStore>((set, get) => ({
+  bears: 0,
+  addBear: () => set((state) => ({ bears: state.bears + 1 })),
+  reset: () => set({ bears: 0 }),
+}));
+```
+- Devuelve un **hook** (`useBearStore`).
+- Estado y acciones viven **juntos** dentro del store.
+- El callback recibe **`set`** (para escribir) y **`get`** (para leer el estado actual sin re-render).
+
+### `set` — las 2 formas
+```ts
+set({ bears: 0 });                         // 1) valor NO depende del anterior
+set((state) => ({ bears: state.bears + 1 })); // 2) SÍ depende del anterior
+```
+🔑 **`set` hace MERGE superficial** (shallow): solo reemplaza las claves de primer nivel que devuelves; lo demás queda intacto. Por eso devuelves `{ bears: ... }` y no se borran las otras props.
+⚠️ El merge es **solo de 1 nivel**. Si tu estado tiene objetos anidados, tú armas el objeto nuevo a mano (spread).
+
+### `get` — leer estado actual dentro de una acción
+```ts
+addBearIfFew: () => {
+  if (get().bears < 3) set((s) => ({ bears: s.bears + 1 }));
+},
+```
+Útil cuando una acción necesita leer el valor actual sin recibirlo por parámetro.
+
+### Selectores — leer en el componente
+```tsx
+const bears = useBearStore((s) => s.bears);       // ✅ se re-renderiza SOLO si bears cambia
+const addBear = useBearStore((s) => s.addBear);   // las acciones son referencia ESTABLE
+```
+- **Pide cada cosa por separado** (un selector por valor). Así minimizas re-renders.
+- ❌ **Gotcha clásico**: seleccionar un OBJETO nuevo cada render causa renders infinitos / de más:
+  ```tsx
+  // MAL: crea objeto nuevo cada render → re-render siempre
+  const { bears, addBear } = useBearStore((s) => ({ bears: s.bears, addBear: s.addBear }));
+  ```
+  Si necesitas varias cosas en un objeto, usa `useShallow`:
+  ```tsx
+  import { useShallow } from "zustand/react/shallow";
+  const { bears, addBear } = useBearStore(useShallow((s) => ({ bears: s.bears, addBear: s.addBear })));
+  ```
+- `useBearStore()` SIN selector → te da TODO el store y re-renderiza con cualquier cambio. Evítalo salvo casos triviales.
+
+### Acción async dentro del store (opcional, muy pro)
+Puedes meter el fetch en el propio store, así el componente queda limpísimo:
+```ts
+interface ItemStore {
+  items: Item[];
+  loading: boolean;
+  fetchItems: () => Promise<void>;
+}
+export const useItemStore = create<ItemStore>((set) => ({
+  items: [],
+  loading: false,
+  fetchItems: async () => {
+    set({ loading: true });
+    const res = await fetch("http://localhost:4000/items");
+    set({ items: await res.json(), loading: false });
+  },
+}));
+// en el componente: useEffect(() => { fetchItems(); }, [fetchItems]);
+```
+
+### Usar el store FUERA de React (dato pro)
+```ts
+useBearStore.getState().bears;        // leer sin hook
+useBearStore.getState().addBear();    // llamar acción sin hook
+useBearStore.setState({ bears: 10 }); // escribir directo
+```
+Sirve en funciones utilitarias, interceptors, etc. (fuera de componentes).
+
+### Gotchas de Zustand (resumen)
+| Error | Por qué | Fix |
+|---|---|---|
+| Re-renders de más / loop | selector devuelve objeto nuevo | selectores separados o `useShallow` |
+| La UI no reacciona | mutaste el estado (`state.items.push`) | devuelve objeto/array NUEVO en `set` |
+| "Cannot update during render" | llamas una acción en el cuerpo del render | llámala en evento o dentro de `useEffect` |
+| Estado se borra al actualizar | pensaste que `set` reemplaza todo | `set` hace **merge**, devuelve solo lo que cambia |
+
+### Frase para la entrevista
+> "Uso Zustand para estado global compartido sin prop drilling. Es más simple que Redux: defino el estado y las acciones juntos en un `create`, leo con selectores para minimizar re-renders, y mantengo todo inmutable para que React detecte los cambios."
+
+---
+
 ## 4) ⚠️ Errores comunes (los que cuestan tiempo)
 
 | Síntoma | Causa | Fix |
